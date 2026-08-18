@@ -11,7 +11,7 @@ class Settings:
     mode: str = os.getenv('MODE', 'paper')
     port: int = int(os.getenv('PORT', '8080'))
     poll_seconds: float = float(os.getenv('POLL_SECONDS', '2'))
-    position_size_usd: float = float(os.getenv('POSITION_SIZE_USD', '10.0'))
+    position_size_usd: float = min(float(os.getenv('POSITION_SIZE_USD', '10.0')), 10.0)
     target_net_usd: float = float(os.getenv('TARGET_NET_USD', '1.0'))
     round_trip_cost_pct: float = float(os.getenv('ROUND_TRIP_COST_PCT', '1.0'))
     daily_trade_goal: int = int(os.getenv('DAILY_TRADE_GOAL', '100'))
@@ -31,24 +31,15 @@ class Settings:
     db_path: str = os.getenv('DB_PATH', '/data/dexmeme-1usd.sqlite3')
 
     def validate(self) -> None:
-        if self.mode != 'paper':
-            raise ValueError('Only paper mode is supported')
-        if self.position_size_usd <= 0:
-            raise ValueError('POSITION_SIZE_USD must be > 0')
-        if self.target_net_usd <= 0:
-            raise ValueError('TARGET_NET_USD must be > 0')
-        if self.round_trip_cost_pct < 0:
-            raise ValueError('ROUND_TRIP_COST_PCT must be >= 0')
-        if self.daily_trade_goal < 1 or self.max_open_positions < 1:
-            raise ValueError('daily trade goal and max positions must be >= 1')
-        if self.stop_loss_pct >= 0:
-            raise ValueError('STOP_LOSS_PCT must be negative')
-        if self.take_profit_min_pct <= 0 or self.take_profit_max_pct < self.take_profit_min_pct:
-            raise ValueError('invalid take-profit range')
-        if self.poll_seconds <= 0 or self.profile_refresh_seconds <= 0:
-            raise ValueError('poll intervals must be positive')
-        path = Path(self.db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if self.mode != 'paper': raise ValueError('Only paper mode is supported')
+        if self.position_size_usd <= 0 or self.position_size_usd > 10.0: raise ValueError('POSITION_SIZE_USD must be > 0 and <= $10')
+        if self.target_net_usd <= 0: raise ValueError('TARGET_NET_USD must be > 0')
+        if self.round_trip_cost_pct < 0: raise ValueError('ROUND_TRIP_COST_PCT must be >= 0')
+        if self.daily_trade_goal < 1 or self.max_open_positions < 1: raise ValueError('daily trade goal and max positions must be >= 1')
+        if self.stop_loss_pct >= 0: raise ValueError('STOP_LOSS_PCT must be negative')
+        if self.take_profit_min_pct <= 0 or self.take_profit_max_pct < self.take_profit_min_pct: raise ValueError('invalid take-profit range')
+        if self.poll_seconds <= 0 or self.profile_refresh_seconds <= 0: raise ValueError('poll intervals must be positive')
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
 settings = Settings()
 settings.validate()
