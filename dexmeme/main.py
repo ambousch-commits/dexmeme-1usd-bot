@@ -19,20 +19,19 @@ def start_dashboard():
 
 async def manage_open_positions(db, dex):
     positions = db.open_positions()
-    if not positions:
-        return
-    await asyncio.gather(*(check_position(p, db, dex) for p in positions), return_exceptions=True)
+    if not positions: return
+    sol_usd = await dex.sol_price_usd()
+    await asyncio.gather(*(check_position(p, db, dex, sol_usd) for p in positions), return_exceptions=True)
 
-async def check_position(pos, db, dex):
+async def check_position(pos, db, dex, sol_usd):
     pairs = await dex.token_pairs(pos.token_address)
     pair = next((p for p in pairs if p.pair_address == pos.pair_address), None)
-    if pair is None or pair.price_usd <= 0:
-        return
+    if pair is None or pair.price_usd <= 0: return
     reason = exit_reason(pos.entry_price, pair.price_usd, pos.target_pct, settings)
     if reason:
         pnl = pnl_pct(pos.entry_price, pair.price_usd)
-        db.close_position(pos.id, pair.price_usd, reason, pnl)
-        log.info('PAPER SELL %s reason=%s pnl=%.2f%%', pos.symbol, reason, pnl)
+        db.close_position(pos.id, pair.price_usd, reason, pnl, sol_usd)
+        log.info('PAPER SELL %s reason=%s pnl=%.2f%% pnl_usd=$%.4f', pos.symbol, reason, pnl, pos.size_usd * pnl / 100.0)
 
 async def run():
     start_dashboard()
@@ -43,26 +42,23 @@ async def run():
         log.info('Starting paper bot: target=$%.2f net, daily goal=%d, size=$%.2f USD', settings.target_net_usd, settings.daily_trade_goal, settings.position_size_usd)
         while True:
             try:
+                sol_usd = await dex.sol_price_usd()
+                # Repair old open rows created before the USD/SOL accounting fix.
+                db.normalize_open_sizes(sol_usd, settings.position_size_usd)
                 await manage_open_positions(db, dex)
                 if db.open_count() < settings.max_open_positions:
                     candidates = await dex.discover_candidates()
-                    sol_usd = await dex.sol_price_usd()
-                    if sol_usd <= 0:
-                        raise ValueError('SOL/USD price unavailable')
                     for pair in candidates:
-                        if db.open_count() >= settings.max_open_positions:
-                            break
-                        if not entry_allowed(pair, settings) or db.has_open_token(pair.token_address):
-                            continue
+                        if db.open_count() >= settings.max_open_positions: break
+                        if not entry_allowed(pair, settings) or db.has_open_token(pair.token_address): continue
                         if settings.require_authorities_revoked:
                             safe = await safety.token_safety(pair.token_address)
                             if not safe.safe:
                                 db.log('safety_reject', pair.token_address, pair.pair_address, f'mint={safe.mint_authority};freeze={safe.freeze_authority}')
                                 continue
                         target = gross_target_pct(pair, settings, sol_usd)
-                        size_sol = settings.position_size_usd / sol_usd
-                        pos = db.open_position(pair, size_sol, target)
-                        log.info('PAPER BUY %s target=%.3f%% size=$%.2f (%.6f SOL) liquidity=$%.0f buys=%d', pos.symbol, target, settings.position_size_usd, size_sol, pair.liquidity_usd, pair.buys_24h)
+                        pos = db.open_position(pair, settings.position_size_usd, sol_usd, target)
+                        log.info('PAPER BUY %s target=%.3f%% size=$%.2f (%.6f SOL) liquidity=$%.0f buys=%d', pos.symbol, target, pos.size_usd, pos.size_sol, pair.liquidity_usd, pair.buys_24h)
                 await asyncio.sleep(settings.poll_seconds)
             except asyncio.CancelledError:
                 raise
@@ -70,9 +66,6 @@ async def run():
                 log.exception('loop error; continuing')
                 await asyncio.sleep(min(30, max(2, settings.poll_seconds * 2)))
     finally:
-        await safety.close()
-        await dex.close()
-        db.close()
+        await safety.close(); await dex.close(); db.close()
 
-if __name__ == '__main__':
-    asyncio.run(run())
+if __name__ == '__main__': asyncio.run(run())
