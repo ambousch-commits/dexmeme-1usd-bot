@@ -34,3 +34,5 @@ class Position:
     entry_time: float
     size_sol: float
     target_pct: float
+    size_usd: float = 10.0
+    entry_sol_usd: float | None = None
