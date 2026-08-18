@@ -20,7 +20,7 @@ class Settings:
     max_open_positions: int = int(os.getenv('MAX_OPEN_POSITIONS', '20'))
     stop_loss_pct: float = float(os.getenv('STOP_LOSS_PCT', '-2.5'))
     take_profit_min_pct: float = float(os.getenv('TAKE_PROFIT_MIN_PCT', '1.25'))
-    take_profit_max_pct: float = float(os.getenv('TAKE_PROFIT_MAX_PCT', '5.0'))
+    take_profit_max_pct: float = float(os.getenv('TAKE_PROFIT_MAX_PCT', '15.0'))
     min_pair_age_seconds: int = int(os.getenv('MIN_PAIR_AGE_SECONDS', '60'))
     max_pair_age_hours: float = float(os.getenv('MAX_PAIR_AGE_HOURS', '24'))
     profile_refresh_seconds: int = int(os.getenv('PROFILE_REFRESH_SECONDS', '30'))
