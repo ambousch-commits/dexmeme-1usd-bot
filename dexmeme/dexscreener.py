@@ -6,6 +6,7 @@ from .config import Settings
 from .models import Pair
 
 SOLANA='solana'
+WSOL_MINT='So11111111111111111111111111111111111111112'
 ALLOWED_QUOTES={'SOL','USDC','USDT','WSOL'}
 
 class DexScreenerClient:
@@ -46,13 +47,26 @@ class DexScreenerClient:
             if p.token_address not in newest or p.pair_created_at_ms>newest[p.token_address].pair_created_at_ms: newest[p.token_address]=p
         return sorted(newest.values(), key=lambda p:p.pair_created_at_ms, reverse=True)
     async def sol_price_usd(self)->float:
-        data=await self._get('/latest/dex/search?q=SOL')
-        pairs=data.get('pairs') or []
-        for p in pairs:
-            if p.get('chainId')=='solana' and p.get('priceUsd'):
-                try: return float(p['priceUsd'])
-                except (TypeError,ValueError): pass
-        return 0.0
+        # Never use /search?q=SOL here: it can return an arbitrary Solana token
+        # whose symbol/name contains "SOL". Resolve the canonical wrapped SOL
+        # mint instead and use a liquid USD-quoted pair.
+        pairs=await self.token_pairs(WSOL_MINT)
+        candidates=[]
+        for raw in pairs:
+            if raw.price_usd <= 0: continue
+            # Prefer USD stablecoin quotes and liquid pairs.
+            quote_symbol=''
+            # token_pairs() intentionally returns Pair only, so liquidity is the
+            # useful ranking signal here. WSOL priceUsd is the USD price of 1 SOL.
+            candidates.append(raw)
+        if not candidates:
+            raise RuntimeError('Unable to resolve canonical SOL/USD price')
+        candidates.sort(key=lambda p:p.liquidity_usd, reverse=True)
+        price=candidates[0].price_usd
+        # Guard against accidentally treating a token price as SOL/USD.
+        if not 10.0 <= price <= 1000.0:
+            raise RuntimeError(f'Invalid SOL/USD price from canonical WSOL pairs: {price}')
+        return price
 
 def _num(v:Any)->float:
     try:return float(v or 0)
