@@ -11,7 +11,7 @@ class Settings:
     mode: str = os.getenv('MODE', 'paper')
     port: int = int(os.getenv('PORT', '8080'))
     poll_seconds: float = float(os.getenv('POLL_SECONDS', '2'))
-    position_size_sol: float = float(os.getenv('POSITION_SIZE_SOL', '1.0'))
+    position_size_usd: float = float(os.getenv('POSITION_SIZE_USD', '10.0'))
     target_net_usd: float = float(os.getenv('TARGET_NET_USD', '1.0'))
     round_trip_cost_pct: float = float(os.getenv('ROUND_TRIP_COST_PCT', '1.0'))
     daily_trade_goal: int = int(os.getenv('DAILY_TRADE_GOAL', '100'))
@@ -33,8 +33,8 @@ class Settings:
     def validate(self) -> None:
         if self.mode != 'paper':
             raise ValueError('Only paper mode is supported')
-        if self.position_size_sol <= 0:
-            raise ValueError('POSITION_SIZE_SOL must be > 0')
+        if self.position_size_usd <= 0:
+            raise ValueError('POSITION_SIZE_USD must be > 0')
         if self.target_net_usd <= 0:
             raise ValueError('TARGET_NET_USD must be > 0')
         if self.round_trip_cost_pct < 0:
