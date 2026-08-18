@@ -40,13 +40,15 @@ async def run():
     dex = DexScreenerClient(settings)
     safety = SolanaSafetyClient(settings.solana_rpc_url, settings.request_timeout_seconds)
     try:
-        log.info('Starting paper bot: target=$%.2f net, daily goal=%d, size=%.3f SOL', settings.target_net_usd, settings.daily_trade_goal, settings.position_size_sol)
+        log.info('Starting paper bot: target=$%.2f net, daily goal=%d, size=$%.2f USD', settings.target_net_usd, settings.daily_trade_goal, settings.position_size_usd)
         while True:
             try:
                 await manage_open_positions(db, dex)
                 if db.open_count() < settings.max_open_positions:
                     candidates = await dex.discover_candidates()
                     sol_usd = await dex.sol_price_usd()
+                    if sol_usd <= 0:
+                        raise ValueError('SOL/USD price unavailable')
                     for pair in candidates:
                         if db.open_count() >= settings.max_open_positions:
                             break
@@ -58,8 +60,9 @@ async def run():
                                 db.log('safety_reject', pair.token_address, pair.pair_address, f'mint={safe.mint_authority};freeze={safe.freeze_authority}')
                                 continue
                         target = gross_target_pct(pair, settings, sol_usd)
-                        pos = db.open_position(pair, settings.position_size_sol, target)
-                        log.info('PAPER BUY %s target=%.3f%% liquidity=$%.0f buys=%d', pos.symbol, target, pair.liquidity_usd, pair.buys_24h)
+                        size_sol = settings.position_size_usd / sol_usd
+                        pos = db.open_position(pair, size_sol, target)
+                        log.info('PAPER BUY %s target=%.3f%% size=$%.2f (%.6f SOL) liquidity=$%.0f buys=%d', pos.symbol, target, settings.position_size_usd, size_sol, pair.liquidity_usd, pair.buys_24h)
                 await asyncio.sleep(settings.poll_seconds)
             except asyncio.CancelledError:
                 raise
