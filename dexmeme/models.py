@@ -36,3 +36,4 @@ class Position:
     target_pct: float
     size_usd: float = 10.0
     entry_sol_usd: float | None = None
+    entry_liquidity_usd: float | None = None
