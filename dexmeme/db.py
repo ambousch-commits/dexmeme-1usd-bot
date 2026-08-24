@@ -17,19 +17,18 @@ def _trade_count(path: Path) -> int:
 
 
 def _resolve_db_path(path: str) -> str:
-    """Keep the configured DB when it has data; otherwise recover an older DB
-    from common Railway volume locations without deleting or modifying it."""
+    """Recover an existing paper database from common Railway volume paths.
+    The recovery is read-only until the selected database is used normally."""
     requested = Path(path)
     candidates = [requested]
     roots = [Path('/data'), Path('/app/data'), Path('/app'), Path.cwd()]
     for root in roots:
         if root.exists():
-            try:
-                candidates.extend(root.glob('*.sqlite3'))
-                candidates.extend(root.glob('*.db'))
-                candidates.extend(root.glob('*.sqlite'))
-            except Exception:
-                pass
+            for pattern in ('*.sqlite3', '*.db', '*.sqlite'):
+                try:
+                    candidates.extend(root.glob(pattern))
+                except Exception:
+                    pass
     unique = []
     seen = set()
     for candidate in candidates:
@@ -41,17 +40,20 @@ def _resolve_db_path(path: str) -> str:
             continue
         seen.add(resolved)
         name = candidate.name.lower()
-        if any(k in name for k in ('dexmeme', '1usd', 'paper')) or candidate == requested:
+        if candidate == requested or any(k in name for k in ('dexmeme', '1usd', 'paper')):
             unique.append(candidate)
     current_count = _trade_count(requested) if requested.exists() else -1
     if current_count > 0:
         return str(requested)
-    best = max(unique, key=_trade_count, default=requested)
-    best_count = _trade_count(best) if best.exists() else 0
-    if best_count > 0:
-        print(f'[DB] configured database has {max(current_count, 0)} trades; using existing database {best} with {best_count} trades')
-        return str(best)
-    return str(requested)
+    best = requested
+    best_count = max(current_count, 0)
+    for candidate in unique:
+        count = _trade_count(candidate)
+        if count > best_count:
+            best, best_count = candidate, count
+    if best != requested and best_count > 0:
+        print(f'[DB] recovered existing paper DB: {best} ({best_count} trades)')
+    return str(best)
 
 
 class Database:
@@ -80,17 +82,15 @@ class Database:
 
     def _migrate(self):
         cols = {r[1] for r in self.conn.execute('PRAGMA table_info(positions)').fetchall()}
-        for name, sql in {
+        migrations = {
             'size_usd': 'ALTER TABLE positions ADD COLUMN size_usd REAL',
             'entry_sol_usd': 'ALTER TABLE positions ADD COLUMN entry_sol_usd REAL',
             'exit_sol_usd': 'ALTER TABLE positions ADD COLUMN exit_sol_usd REAL',
-            'pnl_usd': 'ALTER TABLE positions SET pnl_usd=size_usd*pnl_pct/100.0 WHERE status=closed AND pnl_pct IS NOT NULL AND pnl_usd IS NULL',
-        }.items():
+            'pnl_usd': 'ALTER TABLE positions ADD COLUMN pnl_usd REAL',
+        }
+        for name, sql in migrations.items():
             if name not in cols:
-                if name == 'pnl_usd':
-                    self.conn.execute('ALTER TABLE positions ADD COLUMN pnl_usd REAL')
-                else:
-                    self.conn.execute(sql)
+                self.conn.execute(sql)
         self.conn.execute("UPDATE positions SET size_usd=10.0 WHERE size_usd IS NULL OR size_usd<=0")
         self.conn.execute("UPDATE positions SET pnl_usd=size_usd*pnl_pct/100.0 WHERE status='closed' AND pnl_pct IS NOT NULL AND pnl_usd IS NULL")
 
