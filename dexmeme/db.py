@@ -3,10 +3,62 @@ import sqlite3, time
 from pathlib import Path
 from .models import Pair, Position
 
+
+def _trade_count(path: Path) -> int:
+    try:
+        conn = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=1)
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM positions").fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return -1
+
+
+def _resolve_db_path(path: str) -> str:
+    """Keep the configured DB when it has data; otherwise recover an older DB
+    from common Railway volume locations without deleting or modifying it."""
+    requested = Path(path)
+    candidates = [requested]
+    roots = [Path('/data'), Path('/app/data'), Path('/app'), Path.cwd()]
+    for root in roots:
+        if root.exists():
+            try:
+                candidates.extend(root.glob('*.sqlite3'))
+                candidates.extend(root.glob('*.db'))
+                candidates.extend(root.glob('*.sqlite'))
+            except Exception:
+                pass
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = str(candidate.resolve())
+        except Exception:
+            resolved = str(candidate)
+        if resolved in seen or not candidate.exists() or not candidate.is_file():
+            continue
+        seen.add(resolved)
+        name = candidate.name.lower()
+        if any(k in name for k in ('dexmeme', '1usd', 'paper')) or candidate == requested:
+            unique.append(candidate)
+    current_count = _trade_count(requested) if requested.exists() else -1
+    if current_count > 0:
+        return str(requested)
+    best = max(unique, key=_trade_count, default=requested)
+    best_count = _trade_count(best) if best.exists() else 0
+    if best_count > 0:
+        print(f'[DB] configured database has {max(current_count, 0)} trades; using existing database {best} with {best_count} trades')
+        return str(best)
+    return str(requested)
+
+
 class Database:
     def __init__(self, path: str):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.path = _resolve_db_path(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.executescript('''
@@ -32,10 +84,13 @@ class Database:
             'size_usd': 'ALTER TABLE positions ADD COLUMN size_usd REAL',
             'entry_sol_usd': 'ALTER TABLE positions ADD COLUMN entry_sol_usd REAL',
             'exit_sol_usd': 'ALTER TABLE positions ADD COLUMN exit_sol_usd REAL',
-            'pnl_usd': 'ALTER TABLE positions ADD COLUMN pnl_usd REAL',
+            'pnl_usd': 'ALTER TABLE positions SET pnl_usd=size_usd*pnl_pct/100.0 WHERE status=closed AND pnl_pct IS NOT NULL AND pnl_usd IS NULL',
         }.items():
             if name not in cols:
-                self.conn.execute(sql)
+                if name == 'pnl_usd':
+                    self.conn.execute('ALTER TABLE positions ADD COLUMN pnl_usd REAL')
+                else:
+                    self.conn.execute(sql)
         self.conn.execute("UPDATE positions SET size_usd=10.0 WHERE size_usd IS NULL OR size_usd<=0")
         self.conn.execute("UPDATE positions SET pnl_usd=size_usd*pnl_pct/100.0 WHERE status='closed' AND pnl_pct IS NOT NULL AND pnl_usd IS NULL")
 
