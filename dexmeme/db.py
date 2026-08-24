@@ -4,33 +4,68 @@ from pathlib import Path
 from .models import Pair, Position
 
 
-def _trade_count(path: Path) -> int:
+def _db_counts(path: Path) -> tuple[int, int]:
+    """Read-only count of positions/events. Never creates or modifies a DB."""
     try:
         conn = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=1)
         try:
-            row = conn.execute("SELECT COUNT(*) FROM positions").fetchone()
-            return int(row[0]) if row else 0
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            positions = 0
+            events = 0
+            if 'positions' in tables:
+                row = conn.execute("SELECT COUNT(*) FROM positions").fetchone()
+                positions = int(row[0]) if row else 0
+            if 'events' in tables:
+                row = conn.execute("SELECT COUNT(*) FROM events").fetchone()
+                events = int(row[0]) if row else 0
+            return positions, events
         finally:
             conn.close()
     except Exception:
-        return -1
+        return -1, -1
+
+
+def _trade_count(path: Path) -> int:
+    return _db_counts(path)[0]
+
+
+def _find_db_files(root: Path, max_depth: int = 5) -> list[Path]:
+    if not root.exists() or not root.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        base_depth = len(root.parts)
+        for p in root.rglob('*'):
+            try:
+                if not p.is_file() or p.name.endswith(('-wal', '-shm')):
+                    continue
+                if len(p.parts) - base_depth > max_depth:
+                    continue
+                if p.suffix.lower() in ('.sqlite3', '.sqlite', '.db'):
+                    found.append(p)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return found
 
 
 def _resolve_db_path(path: str) -> str:
-    """Recover an existing paper database from common Railway volume paths.
-    The recovery is read-only until the selected database is used normally."""
+    """Recover an existing paper database from Railway volume paths.
+
+    Discovery is strictly read-only. We scan nested directories as well as the
+    usual locations so an older database is not missed. The selected database
+    is then opened normally by Database without deleting or resetting anything.
+    """
     requested = Path(path)
     candidates = [requested]
     roots = [Path('/data'), Path('/app/data'), Path('/app'), Path.cwd()]
     for root in roots:
-        if root.exists():
-            for pattern in ('*.sqlite3', '*.db', '*.sqlite'):
-                try:
-                    candidates.extend(root.glob(pattern))
-                except Exception:
-                    pass
-    unique = []
-    seen = set()
+        for candidate in _find_db_files(root):
+            candidates.append(candidate)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
     for candidate in candidates:
         try:
             resolved = str(candidate.resolve())
@@ -39,20 +74,31 @@ def _resolve_db_path(path: str) -> str:
         if resolved in seen or not candidate.exists() or not candidate.is_file():
             continue
         seen.add(resolved)
-        name = candidate.name.lower()
-        if candidate == requested or any(k in name for k in ('dexmeme', '1usd', 'paper')):
-            unique.append(candidate)
-    current_count = _trade_count(requested) if requested.exists() else -1
-    if current_count > 0:
+        unique.append(candidate)
+
+    current_positions, current_events = _db_counts(requested) if requested.exists() else (-1, -1)
+    if current_positions > 0 or current_events > 0:
         return str(requested)
+
     best = requested
-    best_count = max(current_count, 0)
+    best_score = max(0, current_positions) * 1000000 + max(0, current_events)
+    best_positions = max(0, current_positions)
+    best_events = max(0, current_events)
+
     for candidate in unique:
-        count = _trade_count(candidate)
-        if count > best_count:
-            best, best_count = candidate, count
-    if best != requested and best_count > 0:
-        print(f'[DB] recovered existing paper DB: {best} ({best_count} trades)')
+        positions, events = _db_counts(candidate)
+        if positions < 0:
+            continue
+        score = positions * 1000000 + max(0, events)
+        # Prefer actual trade history, then event history, then larger DB files.
+        if score > best_score or (score == best_score and candidate.stat().st_size > (best.stat().st_size if best.exists() else 0)):
+            best, best_score = candidate, score
+            best_positions, best_events = positions, events
+
+    if best != requested and (best_positions > 0 or best_events > 0):
+        print(f'[DB] recovered existing paper DB: {best} (positions={best_positions}, events={best_events})')
+    else:
+        print(f'[DB] no historical SQLite DB found; using configured path: {requested}')
     return str(best)
 
 
