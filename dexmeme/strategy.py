@@ -6,6 +6,8 @@ def entry_filter_reason(pair: Pair, settings: Settings) -> str | None:
         return 'invalid_price'
     if pair.liquidity_usd < settings.min_liquidity_usd:
         return 'low_liquidity'
+    if pair.liquidity_usd > settings.max_liquidity_usd:
+        return 'high_liquidity'
     if not (settings.min_pair_age_seconds <= pair.age_seconds <= settings.max_pair_age_hours * 3600):
         return 'age_outside_range'
     if pair.buys_24h < settings.min_buys or pair.buys_1h < settings.min_buys_1h:
